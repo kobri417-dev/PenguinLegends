@@ -16,38 +16,18 @@ jobs:
     container:
       image: barichello/godot-ci:4.3
 
-    env:
-      ANDROID_HOME: /usr/lib/android-sdk
-      ANDROID_SDK_ROOT: /usr/lib/android-sdk
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare Godot environment
-        run: |
-          mkdir -p ~/.config/godot
-          mkdir -p ~/.local/share/godot/export_templates
-          cp -a /root/.config/godot/. ~/.config/godot/
-          cp -a /root/.local/share/godot/export_templates/4.3.stable ~/.local/share/godot/export_templates/
-          cat >> ~/.config/godot/editor_settings-4.3.tres <<'EOF'
-          export/android/java_sdk_path = "/usr/lib/jvm/java-17-openjdk-amd64"
-          export/android/android_sdk_path = "/usr/lib/android-sdk"
-          export/android/debug_keystore = "/root/debug.keystore"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
-          EOF
-
-      - name: Repair Android SDK tools
+      - name: Verify Android SDK
         run: |
           set -eu
-          SDKMANAGER="$(find /usr/lib/android-sdk/cmdline-tools -type f -name sdkmanager | head -n 1)"
-          test -n "$SDKMANAGER"
-          chmod +x "$SDKMANAGER"
-          yes | "$SDKMANAGER" --sdk_root=/usr/lib/android-sdk --licenses || true
-          "$SDKMANAGER" --sdk_root=/usr/lib/android-sdk "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+          echo "ANDROID_HOME=$ANDROID_HOME"
           test -x /usr/lib/android-sdk/build-tools/33.0.2/aapt
           test -f /usr/lib/android-sdk/build-tools/33.0.2/source.properties
+          test -f /root/.config/godot/editor_settings-4.3.tres
+          cat /root/.config/godot/editor_settings-4.3.tres
 
       - name: Extract project
         run: |
@@ -86,6 +66,7 @@ jobs:
           architectures/x86_64=false
           version/code=1
           version/name="1.0"
+          version/target_sdk=33
           package/unique_name="com.kobri417.penguinlegends"
           package/name="Penguin Legends"
           package/signed=true
