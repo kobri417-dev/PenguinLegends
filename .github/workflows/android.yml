@@ -25,10 +25,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Android SDK components
+      - name: Install system tools and Android SDK
         shell: bash
         run: |
           set -euxo pipefail
+
+          apt-get update
+          apt-get install -y curl unzip ca-certificates
+
           export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 
           java -version
@@ -82,7 +86,7 @@ jobs:
 
           mkdir -p "$HOME/.config/godot"
 
-          keytool -genkeypair \
+          keytool -genkeypair -v \
             -keystore "$HOME/debug.keystore" \
             -storepass android \
             -alias androiddebugkey \
@@ -104,11 +108,7 @@ jobs:
           export/android/force_system_user = false
           EOF
 
-          echo "=== Java ==="
           java -version
-          echo "=== Android SDK ==="
-          ls -la "$ANDROID_HOME/build-tools/34.0.0"
-          echo "=== Export templates ==="
           ls -lh "$HOME/.local/share/godot/export_templates/4.3.stable/"
 
       - name: Extract game project
@@ -121,7 +121,9 @@ jobs:
 
           PROJECT_DIR="$(find game -name project.godot -printf '%h\n' | head -n 1)"
           test -n "$PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project found: $PROJECT_DIR"
 
       - name: Generate Android export preset
         shell: bash
@@ -173,19 +175,17 @@ jobs:
           set -euxo pipefail
           godot --headless --path "$PROJECT_DIR" --editor --quit
 
-      - name: Check Android export configuration
+      - name: Export APK
         shell: bash
         run: |
           set -euxo pipefail
+
           godot --headless --verbose \
             --path "$PROJECT_DIR" \
             --export-debug "Android" \
-            "$PROJECT_DIR/build/PenguinLegends.apk" 2>&1 | tee /tmp/android-export.log
+            "$PROJECT_DIR/build/PenguinLegends.apk" \
+            2>&1 | tee /tmp/android-export.log
 
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -euxo pipefail
           test -s "$PROJECT_DIR/build/PenguinLegends.apk"
           ls -lh "$PROJECT_DIR/build/PenguinLegends.apk"
 
