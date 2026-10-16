@@ -16,26 +16,31 @@ jobs:
     container:
       image: barichello/godot-ci:4.3
 
+    env:
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      ANDROID_HOME: /usr/lib/android-sdk
+      ANDROID_SDK_ROOT: /usr/lib/android-sdk
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Android SDK requirements
+      - name: Verify Java and install Android SDK
+        shell: bash
         run: |
-          set -eu
+          set -euxo pipefail
 
-          SDK="/usr/lib/android-sdk"
-          export ANDROID_HOME="$SDK"
-          export ANDROID_SDK_ROOT="$SDK"
-          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
-          export PATH="$JAVA_HOME/bin:$SDK/cmdline-tools/latest/bin:$PATH"
+          export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 
-          SDKMANAGER="$(find "$SDK/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1)"
+          java -version
+          test -x "$JAVA_HOME/bin/java"
+
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1)"
           test -n "$SDKMANAGER"
 
-          yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses || true
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
 
-          "$SDKMANAGER" --sdk_root="$SDK" \
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
             "platform-tools" \
             "platforms;android-34" \
             "build-tools;34.0.0" \
@@ -43,18 +48,29 @@ jobs:
             "cmake;3.10.2.4988404" \
             "ndk;23.2.8568313"
 
-          test -x "$SDK/build-tools/34.0.0/aapt"
-          test -x "$JAVA_HOME/bin/java"
+          ls -la "$ANDROID_HOME/build-tools/34.0.0"
+          ls -la "$ANDROID_HOME/platforms/android-34"
 
       - name: Configure Godot Android export
+        shell: bash
         run: |
-          set -eu
+          set -euxo pipefail
+
+          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+          export ANDROID_HOME="/usr/lib/android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
 
           mkdir -p "$HOME/.config/godot"
           mkdir -p "$HOME/.local/share/godot/export_templates"
 
-          cp -a /root/.local/share/godot/export_templates/4.3.stable \
-            "$HOME/.local/share/godot/export_templates/"
+          if [ -d /root/.local/share/godot/export_templates/4.3.stable ]; then
+            cp -a /root/.local/share/godot/export_templates/4.3.stable \
+              "$HOME/.local/share/godot/export_templates/"
+          fi
+
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.3.stable"
+          test -f "$TEMPLATE_DIR/android_debug.apk"
+          test -f "$TEMPLATE_DIR/android_release.apk"
 
           keytool -genkeypair -v \
             -keystore "$HOME/debug.keystore" \
@@ -78,21 +94,29 @@ jobs:
           export/android/force_system_user = false
           EOF
 
-          test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
-          test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_release.apk"
+          echo "Java:"
+          "$JAVA_HOME/bin/java" -version
+          echo "Android SDK: $ANDROID_HOME"
+          echo "Godot templates: $TEMPLATE_DIR"
 
       - name: Extract project
+        shell: bash
         run: |
-          set -eu
+          set -euxo pipefail
+
           mkdir -p game
           unzip -q PenguinLegends3D_Android_Project_v04.zip -d game
+
           PROJECT_DIR="$(find game -name project.godot -printf '%h\n' | head -n 1)"
           test -n "$PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project found at: $PROJECT_DIR"
 
       - name: Create Android export preset
+        shell: bash
         run: |
-          set -eu
+          set -euxo pipefail
 
           cat > "$PROJECT_DIR/export_presets.cfg" <<'EOF'
           [preset.0]
@@ -134,17 +158,23 @@ jobs:
           mkdir -p "$PROJECT_DIR/build"
 
       - name: Import project
+        shell: bash
         run: |
+          set -euxo pipefail
           godot --headless --path "$PROJECT_DIR" --editor --quit
 
       - name: Export APK
+        shell: bash
         run: |
-          set -eu
+          set -euxo pipefail
+
           godot --headless --verbose \
             --path "$PROJECT_DIR" \
             --export-debug "Android" \
             "$PROJECT_DIR/build/PenguinLegends.apk"
+
           test -s "$PROJECT_DIR/build/PenguinLegends.apk"
+          ls -lh "$PROJECT_DIR/build/PenguinLegends.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
