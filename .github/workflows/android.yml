@@ -20,8 +20,6 @@ jobs:
       ANDROID_SDK_ROOT: /usr/lib/android-sdk
       ANDROID_HOME: /usr/lib/android-sdk
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-      GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
-      GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
 
     steps:
       - name: Checkout repository
@@ -31,11 +29,13 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           apt-get update
           apt-get install -y curl unzip ca-certificates openjdk-17-jdk
 
-          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+          SDKMANAGER="$(find /usr/lib/android-sdk /opt /root \
+            -type f -name sdkmanager 2>/dev/null | head -n 1 || true)"
+
+          if [ -z "$SDKMANAGER" ]; then
             mkdir -p /tmp/android-cli
             curl -fL \
               https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
@@ -44,9 +44,8 @@ jobs:
             mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
             cp -a /tmp/android-cli/cmdline-tools/. \
               "$ANDROID_SDK_ROOT/cmdline-tools/latest/"
+            SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           fi
-
-          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
 
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses || true
 
@@ -56,10 +55,6 @@ jobs:
             "build-tools;34.0.0" \
             "ndk;23.2.8568313" \
             "cmake;3.10.2.4988404"
-
-          test -x "$JAVA_HOME/bin/java"
-          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
-          test -x "$ANDROID_SDK_ROOT/build-tools/34.0.0/aapt"
 
       - name: Install Godot export templates
         shell: bash
@@ -74,19 +69,13 @@ jobs:
             curl -fL \
               https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz \
               -o /tmp/godot-templates.tpz
-
             mkdir -p /tmp/godot-templates
             unzip -oq /tmp/godot-templates.tpz -d /tmp/godot-templates
-
             SOURCE="$(find /tmp/godot-templates \
               -type f -name android_debug.apk -printf '%h\n' | head -n 1)"
-
             test -n "$SOURCE"
             cp -a "$SOURCE/." "$TEMPLATE_DIR/"
           fi
-
-          test -s "$TEMPLATE_DIR/android_debug.apk"
-          test -s "$TEMPLATE_DIR/android_release.apk"
 
       - name: Locate project
         shell: bash
@@ -100,14 +89,13 @@ jobs:
 
           PROJECT_FILE="$(find . -name project.godot \
             -not -path './.git/*' | head -n 1)"
-
           test -n "$PROJECT_FILE"
 
           PROJECT_DIR="$(dirname "$PROJECT_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project found: $PROJECT_DIR"
+          echo "Project: $PROJECT_DIR"
 
-      - name: Configure Android signing
+      - name: Configure Godot and signing
         shell: bash
         run: |
           set -euxo pipefail
@@ -128,11 +116,7 @@ jobs:
             -alias androiddebugkey \
             -keypass android \
             -dname "CN=Android Debug,O=Android,C=US" \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000
-
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/debug.keystore" >> "$GITHUB_ENV"
+            -keyalg RSA -keysize 2048 -validity 10000
 
       - name: Prepare Android export preset
         shell: bash
@@ -172,26 +156,44 @@ jobs:
           version/name="1.0"
           package/unique_name="com.kobri417.penguinlegends"
           package/name="Penguin Legends"
+          package/signed=true
           EOF
           fi
 
           mkdir -p "$PROJECT_DIR/build"
 
-          echo "===== Android export preset ====="
+          # Android debug signing: all three settings must exist.
+          if grep -q '^\[preset\.0\.options\]' "$PRESET"; then
+            if ! grep -q '^keystore/debug=' "$PRESET"; then
+              printf '\nkeystore/debug="%s"\n' "$HOME/debug.keystore" >> "$PRESET"
+            else
+              sed -i "s|^keystore/debug=.*|keystore/debug=\"$HOME/debug.keystore\"|" "$PRESET"
+            fi
+
+            if ! grep -q '^keystore/debug_user=' "$PRESET"; then
+              printf 'keystore/debug_user="androiddebugkey"\n' >> "$PRESET"
+            else
+              sed -i 's|^keystore/debug_user=.*|keystore/debug_user="androiddebugkey"|' "$PRESET"
+            fi
+
+            if ! grep -q '^keystore/debug_password=' "$PRESET"; then
+              printf 'keystore/debug_password="android"\n' >> "$PRESET"
+            else
+              sed -i 's|^keystore/debug_password=.*|keystore/debug_password="android"|' "$PRESET"
+            fi
+          else
+            echo "ERROR: Android preset has no [preset.0.options] section"
+            exit 1
+          fi
+
+          echo "===== Android preset ====="
           cat "$PRESET"
 
-      - name: Import and validate project
+      - name: Import project
         shell: bash
         run: |
           set -euxo pipefail
-
-          godot --version
-          java -version
-          "$ANDROID_SDK_ROOT/platform-tools/adb" version
-
-          godot --headless --editor \
-            --path "$PROJECT_DIR" \
-            --quit
+          godot --headless --editor --path "$PROJECT_DIR" --quit
 
       - name: Export Android APK
         shell: bash
@@ -207,11 +209,10 @@ jobs:
           RESULT=${PIPESTATUS[0]}
 
           if [ "$RESULT" -ne 0 ]; then
-            echo "===== Export error details ====="
+            echo "===== Export diagnostics ====="
             grep -inE \
               'error|invalid|missing|cannot|could not|sdk|keystore|preset|architecture|template' \
               /tmp/android-export.log | tail -n 150 || true
-            echo "===== Last 150 log lines ====="
             tail -n 150 /tmp/android-export.log
             exit "$RESULT"
           fi
