@@ -30,7 +30,7 @@ jobs:
         run: |
           set -euxo pipefail
           apt-get update
-          apt-get install -y curl unzip ca-certificates openjdk-17-jdk
+          apt-get install -y curl unzip ca-certificates openjdk-17-jdk python3
 
           SDKMANAGER="$(find /usr/lib/android-sdk /opt /root \
             -type f -name sdkmanager 2>/dev/null | head -n 1 || true)"
@@ -56,6 +56,12 @@ jobs:
             "ndk;23.2.8568313" \
             "cmake;3.10.2.4988404"
 
+          java -version
+          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
+          test -x "$JAVA_HOME/bin/java"
+          test -x "$JAVA_HOME/bin/keytool"
+          test -d "$ANDROID_SDK_ROOT/build-tools/34.0.0"
+
       - name: Install Godot export templates
         shell: bash
         run: |
@@ -69,15 +75,23 @@ jobs:
             curl -fL \
               https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz \
               -o /tmp/godot-templates.tpz
+
             mkdir -p /tmp/godot-templates
             unzip -oq /tmp/godot-templates.tpz -d /tmp/godot-templates
+
             SOURCE="$(find /tmp/godot-templates \
               -type f -name android_debug.apk -printf '%h\n' | head -n 1)"
+
             test -n "$SOURCE"
             cp -a "$SOURCE/." "$TEMPLATE_DIR/"
           fi
 
-      - name: Locate project
+          test -s "$TEMPLATE_DIR/android_debug.apk"
+          test -s "$TEMPLATE_DIR/android_release.apk"
+          ls -lh "$TEMPLATE_DIR/android_debug.apk" \
+            "$TEMPLATE_DIR/android_release.apk"
+
+      - name: Locate project and fix Android texture setting
         shell: bash
         run: |
           set -euxo pipefail
@@ -89,11 +103,54 @@ jobs:
 
           PROJECT_FILE="$(find . -name project.godot \
             -not -path './.git/*' | head -n 1)"
-          test -n "$PROJECT_FILE"
 
+          test -n "$PROJECT_FILE"
           PROJECT_DIR="$(dirname "$PROJECT_FILE")"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project: $PROJECT_DIR"
+          echo "Project directory: $PROJECT_DIR"
+
+          python3 - "$PROJECT_FILE" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          section = "[rendering]"
+          key = "textures/vram_compression/import_etc2_astc"
+          line = f"{key}=true"
+
+          lines = text.splitlines()
+          start = next(
+              (i for i, value in enumerate(lines)
+               if value.strip() == section),
+              None
+          )
+
+          if start is None:
+              lines.extend(["", section, line])
+          else:
+              end = next(
+                  (i for i in range(start + 1, len(lines))
+                   if lines[i].strip().startswith("[")
+                   and lines[i].strip().endswith("]")),
+                  len(lines)
+              )
+
+              found = False
+              for i in range(start + 1, end):
+                  if lines[i].strip().startswith(key + "="):
+                      lines[i] = line
+                      found = True
+
+              if not found:
+                  lines.insert(end, line)
+
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print("Enabled Android ETC2/ASTC texture import.")
+          PY
+
+          grep -n -A 12 '^\[rendering\]' "$PROJECT_FILE" || true
 
       - name: Configure Godot and signing
         shell: bash
@@ -118,6 +175,8 @@ jobs:
             -dname "CN=Android Debug,O=Android,C=US" \
             -keyalg RSA -keysize 2048 -validity 10000
 
+          test -s "$HOME/debug.keystore"
+
       - name: Prepare Android export preset
         shell: bash
         run: |
@@ -125,7 +184,8 @@ jobs:
 
           PRESET="$PROJECT_DIR/export_presets.cfg"
 
-          if [ ! -f "$PRESET" ] || ! grep -q 'platform="Android"' "$PRESET"; then
+          if [ ! -f "$PRESET" ] || \
+             ! grep -q 'platform="Android"' "$PRESET"; then
             cat > "$PRESET" <<'EOF'
           [preset.0]
 
@@ -150,8 +210,6 @@ jobs:
           gradle_build/use_gradle_build=false
           architectures/armeabi-v7a=false
           architectures/arm64-v8a=true
-          architectures/x86=false
-          architectures/x86_64=false
           version/code=1
           version/name="1.0"
           package/unique_name="com.kobri417.penguinlegends"
@@ -162,31 +220,53 @@ jobs:
 
           mkdir -p "$PROJECT_DIR/build"
 
-          # Android debug signing: all three settings must exist.
-          if grep -q '^\[preset\.0\.options\]' "$PRESET"; then
-            if ! grep -q '^keystore/debug=' "$PRESET"; then
-              printf '\nkeystore/debug="%s"\n' "$HOME/debug.keystore" >> "$PRESET"
-            else
-              sed -i "s|^keystore/debug=.*|keystore/debug=\"$HOME/debug.keystore\"|" "$PRESET"
-            fi
+          python3 - "$PRESET" "$HOME/debug.keystore" <<'PY'
+          import sys
+          from pathlib import Path
 
-            if ! grep -q '^keystore/debug_user=' "$PRESET"; then
-              printf 'keystore/debug_user="androiddebugkey"\n' >> "$PRESET"
-            else
-              sed -i 's|^keystore/debug_user=.*|keystore/debug_user="androiddebugkey"|' "$PRESET"
-            fi
+          path = Path(sys.argv[1])
+          keystore = sys.argv[2]
+          text = path.read_text(encoding="utf-8")
+          lines = text.splitlines()
 
-            if ! grep -q '^keystore/debug_password=' "$PRESET"; then
-              printf 'keystore/debug_password="android"\n' >> "$PRESET"
-            else
-              sed -i 's|^keystore/debug_password=.*|keystore/debug_password="android"|' "$PRESET"
-            fi
-          else
-            echo "ERROR: Android preset has no [preset.0.options] section"
-            exit 1
-          fi
+          values = {
+              "keystore/debug": keystore,
+              "keystore/debug_user": "androiddebugkey",
+              "keystore/debug_password": "android",
+          }
 
-          echo "===== Android preset ====="
+          section = "[preset.0.options]"
+          start = next(
+              (i for i, value in enumerate(lines)
+               if value.strip() == section),
+              None
+          )
+
+          if start is None:
+              raise SystemExit("Missing [preset.0.options] in export preset")
+
+          end = next(
+              (i for i in range(start + 1, len(lines))
+               if lines[i].strip().startswith("[")
+               and lines[i].strip().endswith("]")),
+              len(lines)
+          )
+
+          for key, value in values.items():
+              replacement = f'{key}="{value}"'
+              found = False
+              for i in range(start + 1, end):
+                  if lines[i].strip().startswith(key + "="):
+                      lines[i] = replacement
+                      found = True
+              if not found:
+                  lines.insert(end, replacement)
+                  end += 1
+
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print("Android signing settings configured.")
+          PY
+
           cat "$PRESET"
 
       - name: Import project
@@ -209,15 +289,16 @@ jobs:
           RESULT=${PIPESTATUS[0]}
 
           if [ "$RESULT" -ne 0 ]; then
-            echo "===== Export diagnostics ====="
+            echo "===== Android export diagnostics ====="
             grep -inE \
-              'error|invalid|missing|cannot|could not|sdk|keystore|preset|architecture|template' \
-              /tmp/android-export.log | tail -n 150 || true
-            tail -n 150 /tmp/android-export.log
+              'error|invalid|missing|cannot|could not|sdk|keystore|preset|architecture|template|texture|ETC2|ASTC' \
+              /tmp/android-export.log | tail -n 200 || true
+            tail -n 200 /tmp/android-export.log
             exit "$RESULT"
           fi
 
           test -s "$PROJECT_DIR/build/PenguinLegends.apk"
+          ls -lh "$PROJECT_DIR/build/PenguinLegends.apk"
 
       - name: Upload APK
         if: success()
