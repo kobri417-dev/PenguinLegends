@@ -1,11 +1,10 @@
 
-name: Penguin Legends APK Build
+name: Penguin Legends Android APK
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
@@ -13,27 +12,81 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.3
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract game project
+      - name: Prepare Godot
         run: |
-          set -e
-          mkdir -p game
-          ZIP_FILE=$(find . -maxdepth 1 -name '*.zip' | head -n 1)
-          if [ -z "$ZIP_FILE" ]; then
-            echo "No ZIP file found"
-            exit 1
+          mkdir -p /root/.config
+          mkdir -p /root/.local/share/godot/export_templates
+          if [ -d /root/.config/godot ]; then
+            mkdir -p ~/.config
+            cp -a /root/.config/godot ~/.config/
           fi
-          unzip -q "$ZIP_FILE" -d game
-          find game -name project.godot
+          if [ -d /root/.local/share/godot/export_templates/4.3.stable ]; then
+            mkdir -p ~/.local/share/godot/export_templates
+            cp -a /root/.local/share/godot/export_templates/4.3.stable ~/.local/share/godot/export_templates/
+          fi
 
-      - name: Check Godot project
+      - name: Extract project
         run: |
-          if ! find game -name project.godot | grep -q .; then
-            echo "Godot project not found in ZIP"
-            exit 1
-          fi
-          echo "Godot project found"
+          set -eu
+          mkdir -p game
+          unzip -q PenguinLegends3D_Android_Project_v04.zip -d game
+          PROJECT_DIR="$(find game -name project.godot -printf '%h\n' | head -n 1)"
+          test -n "$PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Create Android export preset
+        run: |
+          cat > "$PROJECT_DIR/export_presets.cfg" <<'EOF'
+          [preset.0]
+          name="Android"
+          platform="Android"
+          runnable=true
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path="build/PenguinLegends.apk"
+          encryption_include_filters=""
+          encryption_exclude_filters=""
+          encrypt_pck=false
+          encrypt_directory=false
+
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          gradle_build/use_gradle_build=false
+          architectures/armeabi-v7a=false
+          architectures/arm64-v8a=true
+          architectures/x86=false
+          architectures/x86_64=false
+          version/code=1
+          version/name="1.0"
+          package/unique_name="com.kobri417.penguinlegends"
+          package/name="Penguin Legends"
+          package/signed=true
+          EOF
+          mkdir -p "$PROJECT_DIR/build"
+
+      - name: Import project
+        run: |
+          godot --headless --path "$PROJECT_DIR" --editor --quit
+
+      - name: Export APK
+        run: |
+          godot --headless --path "$PROJECT_DIR" --export-debug "Android" "$PROJECT_DIR/build/PenguinLegends.apk"
+          test -s "$PROJECT_DIR/build/PenguinLegends.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PenguinLegends-APK
+          path: game/**/build/PenguinLegends.apk
+          if-no-files-found: error
