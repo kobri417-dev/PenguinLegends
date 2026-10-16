@@ -4,7 +4,8 @@ name: Penguin Legends Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -16,21 +17,20 @@ jobs:
       image: barichello/godot-ci:4.3
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare Godot
+      - name: Prepare Godot environment
         run: |
-          mkdir -p /root/.config
-          mkdir -p /root/.local/share/godot/export_templates
-          if [ -d /root/.config/godot ]; then
-            mkdir -p ~/.config
-            cp -a /root/.config/godot ~/.config/
-          fi
-          if [ -d /root/.local/share/godot/export_templates/4.3.stable ]; then
-            mkdir -p ~/.local/share/godot/export_templates
-            cp -a /root/.local/share/godot/export_templates/4.3.stable ~/.local/share/godot/export_templates/
-          fi
+          mkdir -p ~/.config
+          mkdir -p ~/.local/share/godot/export_templates
+          cp -a /root/.config/godot ~/.config/
+          cp -a /root/.local/share/godot/export_templates/4.3.stable ~/.local/share/godot/export_templates/
+          echo 'export/android/java_sdk_path = "/usr/lib/jvm/java-17-openjdk-amd64"' >> ~/.config/godot/editor_settings-4.3.tres
+          echo 'export/android/android_sdk_path = "/usr/lib/android-sdk"' >> ~/.config/godot/editor_settings-4.3.tres
+          echo 'export/android/debug_keystore = "/root/debug.keystore"' >> ~/.config/godot/editor_settings-4.3.tres
+          echo 'export/android/debug_keystore_user = "androiddebugkey"' >> ~/.config/godot/editor_settings-4.3.tres
+          echo 'export/android/debug_keystore_pass = "android"' >> ~/.config/godot/editor_settings-4.3.tres
 
       - name: Extract project
         run: |
@@ -81,7 +81,7 @@ jobs:
 
       - name: Export APK
         run: |
-          godot --headless --path "$PROJECT_DIR" --export-debug "Android" "$PROJECT_DIR/build/PenguinLegends.apk"
+          godot --headless --verbose --path "$PROJECT_DIR" --export-debug "Android" "$PROJECT_DIR/build/PenguinLegends.apk"
           test -s "$PROJECT_DIR/build/PenguinLegends.apk"
 
       - name: Upload APK
