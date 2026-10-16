@@ -21,6 +21,9 @@ jobs:
       ANDROID_HOME: /usr/lib/android-sdk
       ANDROID_SDK_ROOT: /usr/lib/android-sdk
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      GODOT_ANDROID_KEYSTORE_DEBUG_PATH: /root/debug.keystore
+      GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
+      GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
 
     steps:
       - name: Checkout repository
@@ -30,33 +33,65 @@ jobs:
         run: |
           set -eu
 
-          SDKMANAGER="$(find /usr/lib/android-sdk/cmdline-tools \
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
             -type f -name sdkmanager | head -n 1)"
-
           test -n "$SDKMANAGER"
           chmod +x "$SDKMANAGER"
 
-          yes | "$SDKMANAGER" \
-            --sdk_root="$ANDROID_HOME" --licenses || true
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
 
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
             "platform-tools" \
             "platforms;android-34" \
-            "build-tools;34.0.0"
+            "build-tools;34.0.0" \
+            "cmdline-tools;latest" \
+            "cmake;3.10.2.4988404" \
+            "ndk;23.2.8568313"
 
           test -x "$ANDROID_HOME/build-tools/34.0.0/aapt"
-          test -f "$ANDROID_HOME/build-tools/34.0.0/source.properties"
+          test -x "$ANDROID_HOME/platform-tools/adb"
           test -d "$ANDROID_HOME/platforms/android-34"
+          test -d "$ANDROID_HOME/ndk/23.2.8568313"
           test -x "$JAVA_HOME/bin/java"
-
           java -version
 
-      - name: Verify Godot templates
+      - name: Create debug keystore
         run: |
           set -eu
-          test -f "$HOME/.config/godot/editor_settings-4.3.tres"
+          if [ ! -f "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" ]; then
+            keytool -genkeypair -v \
+              -keystore "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          test -s "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH"
+
+      - name: Configure Godot Android paths
+        run: |
+          set -eu
+          mkdir -p "$HOME/.config/godot"
+          mkdir -p "$HOME/.local/share/godot/export_templates"
+
           test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
           test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_release.apk"
+
+          cat > "$HOME/.config/godot/editor_settings-4.3.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/debug_keystore = "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH"
+          export/android/debug_keystore_user = "$GODOT_ANDROID_KEYSTORE_DEBUG_USER"
+          export/android/debug_keystore_pass = "$GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD"
+          EOF
+
+          adb start-server || true
 
       - name: Extract project
         run: |
@@ -98,6 +133,7 @@ jobs:
           architectures/x86_64=false
           version/code=1
           version/name="1.0"
+          version/target_sdk=34
           package/unique_name="com.kobri417.penguinlegends"
           package/name="Penguin Legends"
           package/signed=true
@@ -113,7 +149,6 @@ jobs:
       - name: Export APK
         run: |
           set -eu
-
           godot --headless --verbose \
             --path "$PROJECT_DIR" \
             --export-debug "Android" \
