@@ -1,164 +1,21 @@
 
-name: Penguin Legends Android APK
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-
-permissions:
-  contents: read
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    container:
-      image: barichello/godot-ci:4.3
-
-    env:
-      HOME: /root
-      ANDROID_HOME: /usr/lib/android-sdk
-      ANDROID_SDK_ROOT: /usr/lib/android-sdk
-      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-      GODOT_ANDROID_KEYSTORE_DEBUG_PATH: /root/debug.keystore
-      GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
-      GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Android SDK components
-        run: |
-          set -eu
-
-          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
-            -type f -name sdkmanager | head -n 1)"
-          test -n "$SDKMANAGER"
-          chmod +x "$SDKMANAGER"
-
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
-
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0" \
-            "cmdline-tools;latest" \
-            "cmake;3.10.2.4988404" \
-            "ndk;23.2.8568313"
-
-          test -x "$ANDROID_HOME/build-tools/34.0.0/aapt"
-          test -x "$ANDROID_HOME/platform-tools/adb"
-          test -d "$ANDROID_HOME/platforms/android-34"
-          test -d "$ANDROID_HOME/ndk/23.2.8568313"
-          test -x "$JAVA_HOME/bin/java"
-          java -version
-
-      - name: Create debug keystore
-        run: |
-          set -eu
-          if [ ! -f "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" ]; then
-            keytool -genkeypair -v \
-              -keystore "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
-          test -s "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH"
-
-      - name: Configure Godot Android paths
-        run: |
-          set -eu
-          mkdir -p "$HOME/.config/godot"
-          mkdir -p "$HOME/.local/share/godot/export_templates"
-
-          test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
-          test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_release.apk"
-
-          cat > "$HOME/.config/godot/editor_settings-4.3.tres" <<EOF
-          [gd_resource type="EditorSettings" format=3]
-
-          [resource]
-          export/android/java_sdk_path = "$JAVA_HOME"
-          export/android/android_sdk_path = "$ANDROID_HOME"
-          export/android/debug_keystore = "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH"
-          export/android/debug_keystore_user = "$GODOT_ANDROID_KEYSTORE_DEBUG_USER"
-          export/android/debug_keystore_pass = "$GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD"
-          EOF
-
-          adb start-server || true
-
-      - name: Extract project
-        run: |
-          set -eu
-          mkdir -p game
-          unzip -q PenguinLegends3D_Android_Project_v04.zip -d game
-
-          PROJECT_DIR="$(find game -name project.godot -printf '%h\n' | head -n 1)"
-          test -n "$PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Create Android export preset
-        run: |
-          set -eu
-
-          cat > "$PROJECT_DIR/export_presets.cfg" <<'EOF'
-          [preset.0]
-          name="Android"
-          platform="Android"
-          runnable=true
-          dedicated_server=false
-          custom_features=""
-          export_filter="all_resources"
-          include_filter=""
-          exclude_filter=""
-          export_path="build/PenguinLegends.apk"
-          encryption_include_filters=""
-          encryption_exclude_filters=""
-          encrypt_pck=false
-          encrypt_directory=false
-
-          [preset.0.options]
-          custom_template/debug=""
-          custom_template/release=""
-          gradle_build/use_gradle_build=false
-          architectures/armeabi-v7a=false
-          architectures/arm64-v8a=true
-          architectures/x86=false
-          architectures/x86_64=false
-          version/code=1
-          version/name="1.0"
-          version/target_sdk=34
-          package/unique_name="com.kobri417.penguinlegends"
-          package/name="Penguin Legends"
-          package/signed=true
-          EOF
-
-          mkdir -p "$PROJECT_DIR/build"
-
-      - name: Import project
-        run: |
-          set -eu
-          godot --headless --path "$PROJECT_DIR" --editor --quit
-
       - name: Export APK
         run: |
-          set -eu
+          set +e
+
+          echo "=== Android SDK ==="
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          ls -la "$ANDROID_HOME/build-tools"
+          cat "$ANDROID_HOME/build-tools/34.0.0/source.properties"
+
+          echo "=== Godot Android settings ==="
+          cat "$HOME/.config/godot/editor_settings-4.3.tres"
+
+          echo "=== Export preset ==="
+          cat "$PROJECT_DIR/export_presets.cfg"
+
           godot --headless --verbose \
             --path "$PROJECT_DIR" \
             --export-debug "Android" \
             "$PROJECT_DIR/build/PenguinLegends.apk"
-
-          test -s "$PROJECT_DIR/build/PenguinLegends.apk"
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: PenguinLegends-APK
-          path: game/**/build/PenguinLegends.apk
-          if-no-files-found: error
