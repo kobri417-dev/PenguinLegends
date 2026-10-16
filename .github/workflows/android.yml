@@ -13,10 +13,12 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     container:
       image: barichello/godot-ci:4.3
 
     env:
+      HOME: /root
       ANDROID_HOME: /usr/lib/android-sdk
       ANDROID_SDK_ROOT: /usr/lib/android-sdk
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
@@ -25,44 +27,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Godot Android environment
+      - name: Verify Android environment
         run: |
           set -eu
 
-          mkdir -p "$HOME/.local/share/godot/export_templates"
-          mkdir -p "$HOME/.config/godot"
-
-          if [ -d /root/.local/share/godot/export_templates/4.3.stable ]; then
-            cp -a /root/.local/share/godot/export_templates/4.3.stable \
-              "$HOME/.local/share/godot/export_templates/"
-          fi
-
-          if [ -f /root/.config/godot/editor_settings-4.3.tres ]; then
-            cp /root/.config/godot/editor_settings-4.3.tres \
-              "$HOME/.config/godot/editor_settings-4.3.tres"
-          fi
+          echo "HOME=$HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "JAVA_HOME=$JAVA_HOME"
 
           test -x "$JAVA_HOME/bin/java"
           java -version
 
           test -x "$ANDROID_HOME/build-tools/33.0.2/aapt"
           test -f "$ANDROID_HOME/build-tools/33.0.2/source.properties"
+          test -d "$ANDROID_HOME/platforms/android-33"
 
+          test -f "$HOME/.config/godot/editor_settings-4.3.tres"
           test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
           test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_release.apk"
 
-          mkdir -p "$HOME/.config/godot"
-
-          cat > "$HOME/.config/godot/editor_settings-4.3.tres" <<EOF
-          [gd_resource type="EditorSettings" format=3]
-
-          [resource]
-          export/android/java_sdk_path = "$JAVA_HOME"
-          export/android/android_sdk_path = "$ANDROID_HOME"
-          export/android/debug_keystore = "/root/debug.keystore"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
-          EOF
+          echo "Android SDK and Godot templates found."
 
       - name: Extract project
         run: |
@@ -120,6 +104,7 @@ jobs:
       - name: Export APK
         run: |
           set -eu
+
           godot --headless --verbose \
             --path "$PROJECT_DIR" \
             --export-debug "Android" \
