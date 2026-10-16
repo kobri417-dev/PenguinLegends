@@ -25,7 +25,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Android SDK tools
+      - name: Install Android SDK
         shell: bash
         run: |
           set -euxo pipefail
@@ -33,42 +33,36 @@ jobs:
           apt-get update
           apt-get install -y curl unzip ca-certificates openjdk-17-jdk
 
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-
-          SDKMANAGER="$(find "$ANDROID_SDK_ROOT" /opt /root \
+          SDKMANAGER="$(find /usr/lib/android-sdk /opt /root \
             -type f -name sdkmanager 2>/dev/null | head -n 1 || true)"
 
           if [ -z "$SDKMANAGER" ]; then
-            cd /tmp
+            mkdir -p /tmp/android-cli
             curl -fL \
               https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
-              -o android-commandline-tools.zip
-
-            mkdir -p /tmp/android-cli
-            unzip -oq android-commandline-tools.zip -d /tmp/android-cli
-
+              -o /tmp/android-cli.zip
+            unzip -oq /tmp/android-cli.zip -d /tmp/android-cli
             mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
             cp -a /tmp/android-cli/cmdline-tools/. \
               "$ANDROID_SDK_ROOT/cmdline-tools/latest/"
-
             SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           fi
-
-          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
 
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses || true
 
           "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" \
             "platform-tools" \
+            "platforms;android-33" \
             "platforms;android-34" \
+            "build-tools;33.0.2" \
             "build-tools;34.0.0" \
             "ndk;23.2.8568313" \
             "cmake;3.10.2.4988404"
 
-          test -x "$ANDROID_SDK_ROOT/build-tools/34.0.0/aapt"
-          java -version
+          test -x "$ANDROID_SDK_ROOT/build-tools/33.0.2/aapt"
+          test -x "$JAVA_HOME/bin/java"
 
-      - name: Install Godot Android export templates
+      - name: Install Godot export templates
         shell: bash
         run: |
           set -euxo pipefail
@@ -85,23 +79,16 @@ jobs:
             mkdir -p /tmp/godot-templates
             unzip -oq /tmp/godot-templates.tpz -d /tmp/godot-templates
 
-            TEMPLATE_SOURCE="$(find /tmp/godot-templates \
-              -type d -name '4.3.stable' | head -n 1)"
-
-            if [ -n "$TEMPLATE_SOURCE" ]; then
-              cp -a "$TEMPLATE_SOURCE/." "$TEMPLATE_DIR/"
-            else
-              TEMPLATE_SOURCE="$(find /tmp/godot-templates \
-                -type f -name android_debug.apk -printf '%h\n' | head -n 1)"
-              test -n "$TEMPLATE_SOURCE"
-              cp -a "$TEMPLATE_SOURCE/." "$TEMPLATE_DIR/"
-            fi
+            SOURCE="$(find /tmp/godot-templates \
+              -type f -name android_debug.apk -printf '%h\n' | head -n 1)"
+            test -n "$SOURCE"
+            cp -a "$SOURCE/." "$TEMPLATE_DIR/"
           fi
 
           test -f "$TEMPLATE_DIR/android_debug.apk"
           test -f "$TEMPLATE_DIR/android_release.apk"
 
-      - name: Find Godot project
+      - name: Locate project
         shell: bash
         run: |
           set -euxo pipefail
@@ -113,20 +100,31 @@ jobs:
 
           PROJECT_FILE="$(find . -name project.godot \
             -not -path './.git/*' | head -n 1)"
-
           test -n "$PROJECT_FILE"
 
           PROJECT_DIR="$(dirname "$PROJECT_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project: $PROJECT_DIR"
 
-          echo "Godot project: $PROJECT_DIR"
-
-      - name: Configure Android signing
+      - name: Configure Godot settings and keystore
         shell: bash
         run: |
           set -euxo pipefail
 
-          keytool -genkeypair -v \
+          mkdir -p "$HOME/.config/godot"
+
+          SETTINGS="$HOME/.config/godot/editor_settings-4.3.tres"
+          touch "$SETTINGS"
+
+          if ! grep -q 'export/android/java_sdk_path' "$SETTINGS"; then
+            echo "export/android/java_sdk_path = \"$JAVA_HOME\"" >> "$SETTINGS"
+          fi
+
+          if ! grep -q 'export/android/android_sdk_path' "$SETTINGS"; then
+            echo "export/android/android_sdk_path = \"$ANDROID_SDK_ROOT\"" >> "$SETTINGS"
+          fi
+
+          keytool -genkeypair -noprompt \
             -keystore "$HOME/debug.keystore" \
             -storepass android \
             -alias androiddebugkey \
@@ -136,22 +134,19 @@ jobs:
             -keysize 2048 \
             -validity 10000
 
-          mkdir -p "$HOME/.config/godot"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/debug.keystore" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
 
-          cat > "$HOME/.config/godot/editor_settings-4.3.tres" <<EOF
-          [gd_resource type="EditorSettings" format=3]
-
-          [resource]
-          export/android/java_sdk_path = "$JAVA_HOME"
-          export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
-          EOF
-
-      - name: Configure Android export preset
+      - name: Prepare export preset
         shell: bash
         run: |
           set -euxo pipefail
 
-          cat > "$PROJECT_DIR/export_presets.cfg" <<EOF
+          PRESET="$PROJECT_DIR/export_presets.cfg"
+
+          if [ ! -f "$PRESET" ] || ! grep -q 'platform="Android"' "$PRESET"; then
+            cat > "$PRESET" <<'EOF'
           [preset.0]
 
           name="Android"
@@ -179,30 +174,34 @@ jobs:
           architectures/x86_64=false
           version/code=1
           version/name="1.0"
-          version/target_sdk=34
-          version/min_sdk=23
           package/unique_name="com.kobri417.penguinlegends"
           package/name="Penguin Legends"
           package/signed=true
-          keystore/debug="$HOME/debug.keystore"
-          keystore/debug_user="androiddebugkey"
-          keystore/debug_password="android"
-          keystore/release=""
-          keystore/release_user=""
-          keystore/release_password=""
           EOF
+          fi
 
           mkdir -p "$PROJECT_DIR/build"
 
-      - name: Import Godot project
+          if ! grep -q '^keystore/debug=' "$PRESET"; then
+            printf '\nkeystore/debug="%s"\nkeystore/debug_user="androiddebugkey"\nkeystore/debug_password="android"\n' \
+              "$HOME/debug.keystore" >> "$PRESET"
+          else
+            sed -i "s|^keystore/debug=.*|keystore/debug=\"$HOME/debug.keystore\"|" "$PRESET"
+            sed -i 's|^keystore/debug_user=.*|keystore/debug_user="androiddebugkey"|' "$PRESET"
+            sed -i 's|^keystore/debug_password=.*|keystore/debug_password="android"|' "$PRESET"
+          fi
+
+          if ! grep -q '^keystore/release=' "$PRESET"; then
+            printf '\nkeystore/release=""\nkeystore/release_user=""\nkeystore/release_password=""\n' >> "$PRESET"
+          fi
+
+          cat "$PRESET"
+
+      - name: Import project
         shell: bash
         run: |
           set -euxo pipefail
-
-          godot --headless \
-            --path "$PROJECT_DIR" \
-            --editor \
-            --quit
+          godot --headless --editor --path "$PROJECT_DIR" --quit
 
       - name: Export Android APK
         shell: bash
@@ -218,7 +217,9 @@ jobs:
           RESULT=${PIPESTATUS[0]}
 
           if [ "$RESULT" -ne 0 ]; then
-            echo "Android export failed. Last log lines:"
+            echo "Export failed. Diagnostic lines:"
+            grep -inE 'error|invalid|missing|cannot|could not|sdk|keystore|preset' \
+              /tmp/android-export.log | tail -n 100 || true
             tail -n 100 /tmp/android-export.log
             exit "$RESULT"
           fi
@@ -227,7 +228,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           test -s "$PROJECT_DIR/build/PenguinLegends.apk"
           ls -lh "$PROJECT_DIR/build/PenguinLegends.apk"
 
