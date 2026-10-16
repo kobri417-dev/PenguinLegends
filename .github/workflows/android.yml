@@ -13,7 +13,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     container:
       image: barichello/godot-ci:4.3
 
@@ -27,26 +26,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify Android environment
+      - name: Install Android SDK components
         run: |
           set -eu
 
-          echo "HOME=$HOME"
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "JAVA_HOME=$JAVA_HOME"
+          SDKMANAGER="$(find /usr/lib/android-sdk/cmdline-tools \
+            -type f -name sdkmanager | head -n 1)"
 
+          test -n "$SDKMANAGER"
+          chmod +x "$SDKMANAGER"
+
+          yes | "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" --licenses || true
+
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
+          test -x "$ANDROID_HOME/build-tools/34.0.0/aapt"
+          test -f "$ANDROID_HOME/build-tools/34.0.0/source.properties"
+          test -d "$ANDROID_HOME/platforms/android-34"
           test -x "$JAVA_HOME/bin/java"
+
           java -version
 
-          test -x "$ANDROID_HOME/build-tools/33.0.2/aapt"
-          test -f "$ANDROID_HOME/build-tools/33.0.2/source.properties"
-          test -d "$ANDROID_HOME/platforms/android-33"
-
+      - name: Verify Godot templates
+        run: |
+          set -eu
           test -f "$HOME/.config/godot/editor_settings-4.3.tres"
           test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
           test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_release.apk"
-
-          echo "Android SDK and Godot templates found."
 
       - name: Extract project
         run: |
@@ -88,7 +98,6 @@ jobs:
           architectures/x86_64=false
           version/code=1
           version/name="1.0"
-          version/target_sdk=33
           package/unique_name="com.kobri417.penguinlegends"
           package/name="Penguin Legends"
           package/signed=true
