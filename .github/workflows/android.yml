@@ -105,7 +105,9 @@ jobs:
             -not -path './.git/*' | head -n 1)"
 
           test -n "$PROJECT_FILE"
-          PROJECT_DIR="$(dirname "$PROJECT_FILE")"
+
+          # FIX: use an absolute path for the Godot project.
+          PROJECT_DIR="$(realpath "$(dirname "$PROJECT_FILE")")"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Project directory: $PROJECT_DIR"
@@ -226,8 +228,7 @@ jobs:
 
           path = Path(sys.argv[1])
           keystore = sys.argv[2]
-          text = path.read_text(encoding="utf-8")
-          lines = text.splitlines()
+          lines = path.read_text(encoding="utf-8").splitlines()
 
           values = {
               "keystore/debug": keystore,
@@ -255,10 +256,12 @@ jobs:
           for key, value in values.items():
               replacement = f'{key}="{value}"'
               found = False
+
               for i in range(start + 1, end):
                   if lines[i].strip().startswith(key + "="):
                       lines[i] = replacement
                       found = True
+
               if not found:
                   lines.insert(end, replacement)
                   end += 1
@@ -279,6 +282,8 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+
+          mkdir -p "$PROJECT_DIR/build"
 
           godot --headless --verbose \
             --path "$PROJECT_DIR" \
