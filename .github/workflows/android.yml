@@ -32,18 +32,14 @@ jobs:
           apt-get update
           apt-get install -y curl unzip ca-certificates openjdk-17-jdk python3
 
-          SDKMANAGER="$(find /usr/lib/android-sdk /opt /root \
-            -type f -name sdkmanager 2>/dev/null | head -n 1 || true)"
+          SDKMANAGER="$(find /usr/lib/android-sdk /opt /root -type f -name sdkmanager 2>/dev/null | head -n 1 || true)"
 
           if [ -z "$SDKMANAGER" ]; then
             mkdir -p /tmp/android-cli
-            curl -fL \
-              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
-              -o /tmp/android-cli.zip
+            curl -fL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/android-cli.zip
             unzip -oq /tmp/android-cli.zip -d /tmp/android-cli
             mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-            cp -a /tmp/android-cli/cmdline-tools/. \
-              "$ANDROID_SDK_ROOT/cmdline-tools/latest/"
+            cp -a /tmp/android-cli/cmdline-tools/. "$ANDROID_SDK_ROOT/cmdline-tools/latest/"
             SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           fi
 
@@ -60,6 +56,7 @@ jobs:
           test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
           test -x "$JAVA_HOME/bin/java"
           test -x "$JAVA_HOME/bin/keytool"
+          test -d "$ANDROID_SDK_ROOT/platforms/android-34"
           test -d "$ANDROID_SDK_ROOT/build-tools/34.0.0"
 
       - name: Install Godot export templates
@@ -70,45 +67,42 @@ jobs:
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.3.stable"
           mkdir -p "$TEMPLATE_DIR"
 
-          if [ ! -f "$TEMPLATE_DIR/android_debug.apk" ] || \
-             [ ! -f "$TEMPLATE_DIR/android_release.apk" ]; then
-            curl -fL \
-              https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz \
-              -o /tmp/godot-templates.tpz
-
+          if [ ! -s "$TEMPLATE_DIR/android_debug.apk" ] || [ ! -s "$TEMPLATE_DIR/android_release.apk" ]; then
+            curl -fL https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz -o /tmp/godot-templates.tpz
             mkdir -p /tmp/godot-templates
             unzip -oq /tmp/godot-templates.tpz -d /tmp/godot-templates
 
-            SOURCE="$(find /tmp/godot-templates \
-              -type f -name android_debug.apk -printf '%h\n' | head -n 1)"
-
+            SOURCE="$(find /tmp/godot-templates -type f -name android_debug.apk -printf '%h\n' | head -n 1)"
             test -n "$SOURCE"
             cp -a "$SOURCE/." "$TEMPLATE_DIR/"
           fi
 
           test -s "$TEMPLATE_DIR/android_debug.apk"
           test -s "$TEMPLATE_DIR/android_release.apk"
-          ls -lh "$TEMPLATE_DIR/android_debug.apk" \
-            "$TEMPLATE_DIR/android_release.apk"
 
-      - name: Locate project and fix Android texture setting
+      - name: Locate latest project archive
         shell: bash
         run: |
           set -euxo pipefail
 
-          if [ -f PenguinLegends3D_Android_Project_v04.zip ]; then
-            mkdir -p game
-            unzip -oq PenguinLegends3D_Android_Project_v04.zip -d game
+          ZIP_FILE="$(find . -maxdepth 1 -type f -name 'PenguinLegends3D_Android_Project_v*.zip' -print | sort -V | tail -n 1)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No PenguinLegends3D versioned ZIP found in repository root."
+            exit 1
           fi
 
-          PROJECT_FILE="$(find . -name project.godot \
-            -not -path './.git/*' | head -n 1)"
+          echo "Using project archive: $ZIP_FILE"
+          mkdir -p game
+          unzip -oq "$ZIP_FILE" -d game
 
-          test -n "$PROJECT_FILE"
+          PROJECT_FILE="$(find game -name project.godot -print | head -n 1)"
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: project.godot was not found inside the archive."
+            exit 1
+          fi
 
-          # FIX: use an absolute path for the Godot project.
           PROJECT_DIR="$(realpath "$(dirname "$PROJECT_FILE")")"
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Project directory: $PROJECT_DIR"
 
@@ -117,20 +111,18 @@ jobs:
           from pathlib import Path
 
           path = Path(sys.argv[1])
-          text = path.read_text(encoding="utf-8")
+          lines = path.read_text(encoding="utf-8").splitlines()
           section = "[rendering]"
           key = "textures/vram_compression/import_etc2_astc"
-          line = f"{key}=true"
+          replacement = f"{key}=true"
 
-          lines = text.splitlines()
           start = next(
-              (i for i, value in enumerate(lines)
-               if value.strip() == section),
+              (i for i, line in enumerate(lines) if line.strip() == section),
               None
           )
 
           if start is None:
-              lines.extend(["", section, line])
+              lines.extend(["", section, replacement])
           else:
               end = next(
                   (i for i in range(start + 1, len(lines))
@@ -142,19 +134,17 @@ jobs:
               found = False
               for i in range(start + 1, end):
                   if lines[i].strip().startswith(key + "="):
-                      lines[i] = line
+                      lines[i] = replacement
                       found = True
 
               if not found:
-                  lines.insert(end, line)
+                  lines.insert(end, replacement)
 
           path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-          print("Enabled Android ETC2/ASTC texture import.")
+          print("Android texture setting configured.")
           PY
 
-          grep -n -A 12 '^\[rendering\]' "$PROJECT_FILE" || true
-
-      - name: Configure Godot and signing
+      - name: Configure Godot and Android signing
         shell: bash
         run: |
           set -euxo pipefail
@@ -186,8 +176,7 @@ jobs:
 
           PRESET="$PROJECT_DIR/export_presets.cfg"
 
-          if [ ! -f "$PRESET" ] || \
-             ! grep -q 'platform="Android"' "$PRESET"; then
+          if [ ! -f "$PRESET" ] || ! grep -q 'platform="Android"' "$PRESET"; then
             cat > "$PRESET" <<'EOF'
           [preset.0]
 
@@ -238,13 +227,12 @@ jobs:
 
           section = "[preset.0.options]"
           start = next(
-              (i for i, value in enumerate(lines)
-               if value.strip() == section),
+              (i for i, line in enumerate(lines) if line.strip() == section),
               None
           )
 
           if start is None:
-              raise SystemExit("Missing [preset.0.options] in export preset")
+              raise SystemExit("Missing [preset.0.options]")
 
           end = next(
               (i for i in range(start + 1, len(lines))
@@ -267,16 +255,44 @@ jobs:
                   end += 1
 
           path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-          print("Android signing settings configured.")
+          print("Android signing configured.")
           PY
 
-          cat "$PRESET"
-
-      - name: Import project
+      - name: Import project and check scripts
         shell: bash
         run: |
-          set -euxo pipefail
-          godot --headless --editor --path "$PROJECT_DIR" --quit
+          set -uo pipefail
+
+          godot --headless --editor --path "$PROJECT_DIR" --quit 2>&1 | tee /tmp/godot-import.log
+          RESULT=${PIPESTATUS[0]}
+
+          if [ "$RESULT" -ne 0 ]; then
+            cat /tmp/godot-import.log
+            exit "$RESULT"
+          fi
+
+          if grep -inE 'SCRIPT ERROR:|Parse Error:|Failed to load script|Compile Error:' /tmp/godot-import.log; then
+            echo "ERROR: Godot script errors found during import."
+            exit 1
+          fi
+
+      - name: Validate project scripts
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          godot --headless --path "$PROJECT_DIR" --editor --quit 2>&1 | tee /tmp/godot-validate.log
+          RESULT=${PIPESTATUS[0]}
+
+          if [ "$RESULT" -ne 0 ]; then
+            cat /tmp/godot-validate.log
+            exit "$RESULT"
+          fi
+
+          if grep -inE 'SCRIPT ERROR:|Parse Error:|Failed to load script|Compile Error:' /tmp/godot-validate.log; then
+            echo "ERROR: Godot script errors found. APK export cancelled."
+            exit 1
+          fi
 
       - name: Export Android APK
         shell: bash
@@ -294,12 +310,14 @@ jobs:
           RESULT=${PIPESTATUS[0]}
 
           if [ "$RESULT" -ne 0 ]; then
-            echo "===== Android export diagnostics ====="
-            grep -inE \
-              'error|invalid|missing|cannot|could not|sdk|keystore|preset|architecture|template|texture|ETC2|ASTC' \
-              /tmp/android-export.log | tail -n 200 || true
+            grep -inE 'error|invalid|missing|cannot|could not|sdk|keystore|preset|architecture|template|texture|ETC2|ASTC|SCRIPT ERROR|Parse Error' /tmp/android-export.log | tail -n 200 || true
             tail -n 200 /tmp/android-export.log
             exit "$RESULT"
+          fi
+
+          if grep -inE 'SCRIPT ERROR:|Parse Error:|Failed to load script|Compile Error:' /tmp/android-export.log; then
+            echo "ERROR: Script errors found during export."
+            exit 1
           fi
 
           test -s "$PROJECT_DIR/build/PenguinLegends.apk"
