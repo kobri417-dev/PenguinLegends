@@ -25,11 +25,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify Java and install Android SDK
+      - name: Install Android SDK components
         shell: bash
         run: |
           set -euxo pipefail
-
           export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 
           java -version
@@ -48,31 +47,42 @@ jobs:
             "cmake;3.10.2.4988404" \
             "ndk;23.2.8568313"
 
-          ls -la "$ANDROID_HOME/build-tools/34.0.0"
-          ls -la "$ANDROID_HOME/platforms/android-34"
+          test -d "$ANDROID_HOME/platforms/android-34"
+          test -d "$ANDROID_HOME/build-tools/34.0.0"
 
-      - name: Configure Godot Android export
+      - name: Install Godot export templates
         shell: bash
         run: |
           set -euxo pipefail
 
-          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
-          export ANDROID_HOME="/usr/lib/android-sdk"
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          mkdir -p "$HOME/.local/share/godot/export_templates"
+          cd /tmp
+
+          curl -fL --retry 3 \
+            -o godot_templates.tpz \
+            https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz
+
+          mkdir -p godot_templates
+          unzip -q godot_templates.tpz -d godot_templates
+
+          TEMPLATE_SOURCE="$(find /tmp/godot_templates -type f -name android_debug.apk -printf '%h\n' | head -n 1)"
+          test -n "$TEMPLATE_SOURCE"
+
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.3.stable"
+          cp -a "$TEMPLATE_SOURCE/." \
+            "$HOME/.local/share/godot/export_templates/4.3.stable/"
+
+          test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
+          test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_release.apk"
+
+      - name: Configure Android export
+        shell: bash
+        run: |
+          set -euxo pipefail
 
           mkdir -p "$HOME/.config/godot"
-          mkdir -p "$HOME/.local/share/godot/export_templates"
 
-          if [ -d /root/.local/share/godot/export_templates/4.3.stable ]; then
-            cp -a /root/.local/share/godot/export_templates/4.3.stable \
-              "$HOME/.local/share/godot/export_templates/"
-          fi
-
-          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.3.stable"
-          test -f "$TEMPLATE_DIR/android_debug.apk"
-          test -f "$TEMPLATE_DIR/android_release.apk"
-
-          keytool -genkeypair -v \
+          keytool -genkeypair \
             -keystore "$HOME/debug.keystore" \
             -storepass android \
             -alias androiddebugkey \
@@ -94,12 +104,14 @@ jobs:
           export/android/force_system_user = false
           EOF
 
-          echo "Java:"
-          "$JAVA_HOME/bin/java" -version
-          echo "Android SDK: $ANDROID_HOME"
-          echo "Godot templates: $TEMPLATE_DIR"
+          echo "=== Java ==="
+          java -version
+          echo "=== Android SDK ==="
+          ls -la "$ANDROID_HOME/build-tools/34.0.0"
+          echo "=== Export templates ==="
+          ls -lh "$HOME/.local/share/godot/export_templates/4.3.stable/"
 
-      - name: Extract project
+      - name: Extract game project
         shell: bash
         run: |
           set -euxo pipefail
@@ -109,11 +121,9 @@ jobs:
 
           PROJECT_DIR="$(find game -name project.godot -printf '%h\n' | head -n 1)"
           test -n "$PROJECT_DIR"
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project found at: $PROJECT_DIR"
 
-      - name: Create Android export preset
+      - name: Generate Android export preset
         shell: bash
         run: |
           set -euxo pipefail
@@ -163,16 +173,19 @@ jobs:
           set -euxo pipefail
           godot --headless --path "$PROJECT_DIR" --editor --quit
 
-      - name: Export APK
+      - name: Check Android export configuration
         shell: bash
         run: |
           set -euxo pipefail
-
           godot --headless --verbose \
             --path "$PROJECT_DIR" \
             --export-debug "Android" \
-            "$PROJECT_DIR/build/PenguinLegends.apk"
+            "$PROJECT_DIR/build/PenguinLegends.apk" 2>&1 | tee /tmp/android-export.log
 
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euxo pipefail
           test -s "$PROJECT_DIR/build/PenguinLegends.apk"
           ls -lh "$PROJECT_DIR/build/PenguinLegends.apk"
 
