@@ -22,7 +22,8 @@ jobs:
 
       - name: Prepare Godot environment
         run: |
-          mkdir -p ~/.config ~/.local/share/godot/export_templates
+          mkdir -p ~/.config/godot
+          mkdir -p ~/.local/share/godot/export_templates
           cp -a /root/.config/godot/. ~/.config/godot/
           cp -a /root/.local/share/godot/export_templates/4.3.stable ~/.local/share/godot/export_templates/
           echo 'export/android/java_sdk_path = "/usr/lib/jvm/java-17-openjdk-amd64"' >> ~/.config/godot/editor_settings-4.3.tres
@@ -30,7 +31,14 @@ jobs:
           echo 'export/android/debug_keystore = "/root/debug.keystore"' >> ~/.config/godot/editor_settings-4.3.tres
           echo 'export/android/debug_keystore_user = "androiddebugkey"' >> ~/.config/godot/editor_settings-4.3.tres
           echo 'export/android/debug_keystore_pass = "android"' >> ~/.config/godot/editor_settings-4.3.tres
-          ls -la /usr/lib/android-sdk/build-tools/33.0.2
+
+      - name: Diagnose Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          find / -type d -name "33.0.2" 2>/dev/null | head -n 20
+          find / -type f -name "aapt" 2>/dev/null | head -n 20
+          command -v sdkmanager || true
 
       - name: Extract project
         run: |
