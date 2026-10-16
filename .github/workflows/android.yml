@@ -1,8 +1,14 @@
 
-name: Build Penguin Legends 3D APK
+name: Penguin Legends APK Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -12,16 +18,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Show project files
+      - name: Extract game project
         run: |
-          echo "Files in repository:"
-          ls -la
-          echo "Searching for Godot project:"
-          find . -name project.godot
-
-      - name: Check project
-        run: |
-          if ! find . -name project.godot | grep -q .; then
-            echo "ERROR: No Godot project found. ZIP may need to be extracted."
+          set -e
+          mkdir -p game
+          ZIP_FILE=$(find . -maxdepth 1 -name '*.zip' | head -n 1)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "No ZIP file found"
             exit 1
           fi
+          unzip -q "$ZIP_FILE" -d game
+          find game -name project.godot
+
+      - name: Check Godot project
+        run: |
+          if ! find game -name project.godot | grep -q .; then
+            echo "Godot project not found in ZIP"
+            exit 1
+          fi
+          echo "Godot project found"
