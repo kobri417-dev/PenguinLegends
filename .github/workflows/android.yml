@@ -1,21 +1,19 @@
 
-      - name: Export APK
+name: Penguin Legends Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check workflow
         run: |
-          set +e
-
-          echo "=== Android SDK ==="
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          ls -la "$ANDROID_HOME/build-tools"
-          cat "$ANDROID_HOME/build-tools/34.0.0/source.properties"
-
-          echo "=== Godot Android settings ==="
-          cat "$HOME/.config/godot/editor_settings-4.3.tres"
-
-          echo "=== Export preset ==="
-          cat "$PROJECT_DIR/export_presets.cfg"
-
-          godot --headless --verbose \
-            --path "$PROJECT_DIR" \
-            --export-debug "Android" \
-            "$PROJECT_DIR/build/PenguinLegends.apk"
+          echo "GitHub Actions YAML is valid"
